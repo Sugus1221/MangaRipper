@@ -1,0 +1,28 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Herramientas
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pylint.d/
+
+# Salida de la aplicación si se usa la carpeta del proyecto
+/Descargas/
+*.zip
+
+# Sistema
+.DS_Store
+Thumbs.db
