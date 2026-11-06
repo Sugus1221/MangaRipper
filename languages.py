@@ -1,4 +1,4 @@
-"""Minimal translation layer for MangaZIP.
+"""Translation layer for Mangaripper.
 
 Adding a language means adding one entry to ``LANGUAGES`` and one dictionary
 of the same keys to ``TRANSLATIONS``. Missing keys fall back to English, so a
@@ -20,7 +20,7 @@ LANGUAGES: dict[str, str] = {
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
         # Window and form
-        "app.title": "MangaZIP — Chapter downloader",
+        "app.title": "Mangaripper — Chapter downloader",
         "app.subtitle": (
             "Paste a chapter URL and create a ZIP with every page as a lossless PNG."
         ),
@@ -45,13 +45,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "status.finished": "Finished.",
         "status.failed": "Stopped or failed.",
         # Dialogs
-        "dialog.title": "MangaZIP",
+        "dialog.title": "Mangaripper",
         "dialog.invalid_url_title": "Invalid URL",
         "dialog.invalid_url": "Paste a full URL starting with https:// or http://",
         "dialog.invalid_folder_title": "Invalid folder",
         "dialog.invalid_folder": "I can't create the destination folder:\n{error}",
         "dialog.open_failed_title": "Could not open",
-        "dialog.close_title": "Exit MangaZIP",
+        "dialog.close_title": "Exit Mangaripper",
         "dialog.close_running": (
             "A download is in progress. Do you want to cancel it and exit?"
         ),
@@ -114,7 +114,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "es": {
         # Ventana y formulario
-        "app.title": "MangaZIP — Descargador de capítulos",
+        "app.title": "Mangaripper — Descargador de capítulos",
         "app.subtitle": (
             "Pega la URL de un capítulo y crea un ZIP con todas las páginas "
             "en PNG sin recompresión con pérdida."
@@ -140,13 +140,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "status.finished": "Proceso finalizado.",
         "status.failed": "Proceso detenido o fallido.",
         # Diálogos
-        "dialog.title": "MangaZIP",
+        "dialog.title": "Mangaripper",
         "dialog.invalid_url_title": "URL no válida",
         "dialog.invalid_url": "Pega una URL completa que empiece por https:// o http://",
         "dialog.invalid_folder_title": "Carpeta no válida",
         "dialog.invalid_folder": "No puedo crear la carpeta de destino:\n{error}",
         "dialog.open_failed_title": "No se pudo abrir",
-        "dialog.close_title": "Salir de MangaZIP",
+        "dialog.close_title": "Salir de Mangaripper",
         "dialog.close_running": (
             "Hay una descarga en curso. ¿Quieres cancelarla y salir?"
         ),
@@ -221,7 +221,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 _state = {"code": DEFAULT_LANGUAGE}
 
 CONFIG_DIR = (
-    Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mangazip"
+    Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mangaripper"
 )
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 

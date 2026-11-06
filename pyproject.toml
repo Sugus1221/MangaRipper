@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mangaripper"
 version = "0.1.0"
-description = "MangaZIP: download public chapters and pack them into a PNG ZIP"
+description = "Mangaripper: download public chapters and pack them into a PNG ZIP"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,10 +20,10 @@ browser = ["playwright>=1.45.0"]
 dev = ["pytest>=8.0", "pylint>=3.0"]
 
 [project.scripts]
-mangazip = "mangazip:main"
+mangaripper = "mangaripper:main"
 
 [tool.setuptools]
-py-modules = ["mangazip", "mangazip_i18n"]
+py-modules = ["mangaripper", "languages"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

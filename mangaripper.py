@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MangaZIP: a small GUI to save the images of an accessible chapter into a ZIP.
+"""Mangaripper: a small GUI to save the images of an accessible chapter into a ZIP.
 
 Responsible use: download only images the page serves normally.
 It does not try to bypass logins, captchas, DRM, or access protections.
@@ -28,7 +28,7 @@ from soupsieve import SelectorSyntaxError
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from mangazip_i18n import (
+from languages import (
     LANGUAGES,
     get_language,
     load_language,
@@ -37,7 +37,7 @@ from mangazip_i18n import (
     t,
 )
 
-APP_NAME = "MangaZIP"
+APP_NAME = "Mangaripper"
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
@@ -421,11 +421,11 @@ def default_output_dir() -> Path:
     for name in ("Downloads", "Descargas"):
         folder = home / name
         if folder.is_dir():
-            return folder / "MangaZIP"
-    return home / "Downloads" / "MangaZIP"
+            return folder / APP_NAME
+    return home / "Downloads" / APP_NAME
 
 
-class MangaZIPApp:
+class MangaripperApp:
     """Main window: form, progress, and download log."""
 
     def __init__(self, root: tk.Tk) -> None:
@@ -459,7 +459,7 @@ class MangaZIPApp:
         header.pack(fill="x")
         ttk.Label(
             header,
-            text="MangaZIP",
+            text=APP_NAME,
             font=("TkDefaultFont", 18, "bold"),
         ).pack(side="left")
         language_row = ttk.Frame(header)
@@ -693,7 +693,7 @@ class MangaZIPApp:
                 )
                 image_urls = image_urls[:MAX_IMAGES]
             self._log(t("log.found_pages", count=len(image_urls)))
-            temp_dir = Path(tempfile.mkdtemp(prefix="mangazip_", dir=str(out)))
+            temp_dir = Path(tempfile.mkdtemp(prefix="mangaripper_", dir=str(out)))
             self.current_temp_dir = temp_dir
             downloaded: list[Path] = []
             failed_count = 0
@@ -870,7 +870,7 @@ def main() -> None:
         ttk.Style().theme_use("clam")
     except tk.TclError:
         pass
-    app = MangaZIPApp(root)
+    app = MangaripperApp(root)
     try:
         root.mainloop()
     finally:

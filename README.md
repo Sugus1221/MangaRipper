@@ -4,9 +4,9 @@ A Python/Tkinter desktop app that saves the visible pages of a public chapter an
 
 ## Languages
 
-The interface ships in English and Spanish, and you can switch language inside the app with the **Language** dropdown at the top right. The choice is remembered between runs (stored in `~/.config/mangazip/settings.json`).
+The interface ships in English and Spanish, and you can switch language inside the app with the **Language** dropdown at the top right. The choice is remembered between runs (stored in `~/.config/mangaripper/settings.json`).
 
-**Adding a language** is a matter of editing `mangazip_i18n.py`:
+**Adding a language** is a matter of editing `languages.py`:
 
 1. Add your code to `LANGUAGES`, e.g. `"fr": "Français"`.
 2. Add a `TRANSLATIONS["fr"]` dictionary with the same keys as `TRANSLATIONS["en"]`.
@@ -28,7 +28,7 @@ From the project folder:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
-python mangazip.py     # or simply: mangazip
+python mangaripper.py # or simply: mangaripper
 ```
 
 `requirements.txt` is still available if you prefer to install the dependencies on their own with `pip install -r requirements.txt`.
@@ -68,7 +68,7 @@ The ZIP is created without extra compression (`ZIP_STORED`): PNG files already c
 
 ## Development
 
-The project is packaged with `pyproject.toml` (setuptools), and the `mangazip` console command is available once installed. To run the tests:
+The project is packaged with `pyproject.toml` (setuptools), and the `mangaripper` console command is available once installed. To run the tests:
 
 ```bash
 python -m pip install -e ".[dev]"

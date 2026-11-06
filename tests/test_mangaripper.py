@@ -12,8 +12,8 @@ import requests
 from bs4 import BeautifulSoup
 from PIL import Image, UnidentifiedImageError
 
-import mangazip
-import mangazip_i18n as i18n
+import mangaripper
+import languages as i18n
 
 
 def setUpModule():
@@ -23,49 +23,49 @@ def setUpModule():
 
 class CleanNameTests(unittest.TestCase):
     def test_removes_invalid_characters(self):
-        cleaned = mangazip.clean_name('a/b\\c:d*e?f"g<h>i|j')
+        cleaned = mangaripper.clean_name('a/b\\c:d*e?f"g<h>i|j')
         self.assertNotRegex(cleaned, r'[<>:"/\\|?*]')
         self.assertTrue(cleaned)
 
     def test_collapses_spaces_and_strips_dots(self):
-        self.assertEqual(mangazip.clean_name("  capítulo   01 ... "), "capítulo 01")
+        self.assertEqual(mangaripper.clean_name("  capítulo   01 ... "), "capítulo 01")
 
     def test_truncates_to_120_characters(self):
-        self.assertEqual(len(mangazip.clean_name("x" * 500)), 120)
+        self.assertEqual(len(mangaripper.clean_name("x" * 500)), 120)
 
     def test_fallback_for_empty_value(self):
-        self.assertEqual(mangazip.clean_name("   ", "chapter"), "chapter")
-        self.assertEqual(mangazip.clean_name("...", "chapter"), "chapter")
+        self.assertEqual(mangaripper.clean_name("   ", "chapter"), "chapter")
+        self.assertEqual(mangaripper.clean_name("...", "chapter"), "chapter")
 
     def test_escapes_windows_reserved_names(self):
-        self.assertEqual(mangazip.clean_name("CON"), "_CON")
-        self.assertEqual(mangazip.clean_name("con.txt"), "_con.txt")
-        self.assertEqual(mangazip.clean_name("console"), "console")
+        self.assertEqual(mangaripper.clean_name("CON"), "_CON")
+        self.assertEqual(mangaripper.clean_name("con.txt"), "_con.txt")
+        self.assertEqual(mangaripper.clean_name("console"), "console")
 
     def test_keeps_accents(self):
-        self.assertEqual(mangazip.clean_name("Capítulo 1"), "Capítulo 1")
+        self.assertEqual(mangaripper.clean_name("Capítulo 1"), "Capítulo 1")
 
 
 class UrlTests(unittest.TestCase):
     def test_normalizes_relative_url_and_removes_fragment(self):
         self.assertEqual(
-            mangazip.normalize_url("../pag/01.jpg#top", "https://sitio.example/cap/1/"),
+            mangaripper.normalize_url("../pag/01.jpg#top", "https://sitio.example/cap/1/"),
             "https://sitio.example/cap/pag/01.jpg",
         )
 
     def test_keeps_protocol_relative_url(self):
         self.assertEqual(
-            mangazip.normalize_url("//cdn.example/01.jpg", "https://sitio.example/cap"),
+            mangaripper.normalize_url("//cdn.example/01.jpg", "https://sitio.example/cap"),
             "https://cdn.example/01.jpg",
         )
 
     def test_rejects_unsupported_schemes(self):
         for value in ("data:image/png;base64,xx", "blob:http://x", "javascript:void(0)", "ftp://x/y", ""):
-            self.assertIsNone(mangazip.normalize_url(value, "https://sitio.example/"))
+            self.assertIsNone(mangaripper.normalize_url(value, "https://sitio.example/"))
 
     def test_parse_srcset_preserves_declared_order(self):
         self.assertEqual(
-            mangazip.parse_srcset(
+            mangaripper.parse_srcset(
                 "small.jpg 480w, big.jpg 1200w, blob:https://x/y 1x",
                 "https://cdn.example/",
             ),
@@ -79,7 +79,7 @@ class UrlTests(unittest.TestCase):
             "html.parser",
         ).img
         self.assertEqual(
-            mangazip.attrs_from_element(element, "https://cdn.example/"),
+            mangaripper.attrs_from_element(element, "https://cdn.example/"),
             [
                 "https://cdn.example/real.jpg",
                 "https://cdn.example/big.jpg",
@@ -93,7 +93,7 @@ class UrlTests(unittest.TestCase):
             "html.parser",
         ).div
         self.assertEqual(
-            mangazip.attrs_from_element(element, "https://cdn.example/"),
+            mangaripper.attrs_from_element(element, "https://cdn.example/"),
             ["https://cdn.example/pagina.jpg"],
         )
 
@@ -106,7 +106,7 @@ class ExtractImageTests(unittest.TestCase):
           <img data-src="https://cdn.example/02.jpg" src="https://cdn.example/placeholder.gif">
         </div>
         """
-        urls, title, selector = mangazip.extract_image_urls(
+        urls, title, selector = mangaripper.extract_image_urls(
             html, "https://sitio.example/cap/1", ".reader-area img"
         )
         self.assertEqual(
@@ -123,7 +123,7 @@ class ExtractImageTests(unittest.TestCase):
           <img data-src="https://cdn.example/02.jpg">
         </div>
         """
-        urls, title, selector = mangazip.extract_image_urls(
+        urls, title, selector = mangaripper.extract_image_urls(
             html, "https://sitio.example/cap/3"
         )
         self.assertEqual(len(urls), 2)
@@ -137,7 +137,7 @@ class ExtractImageTests(unittest.TestCase):
           <img class="page" src="https://cdn.example/01.jpg">
         </body>
         """
-        urls, _title, selector = mangazip.extract_image_urls(
+        urls, _title, selector = mangaripper.extract_image_urls(
             html, "https://sitio.example/cap/1"
         )
         self.assertEqual(urls, ["https://cdn.example/01.jpg"])
@@ -145,7 +145,7 @@ class ExtractImageTests(unittest.TestCase):
 
     def test_generic_fallback_keeps_single_page(self):
         html = '<body><img class="page" src="https://cdn.example/01.jpg"></body>'
-        urls, _title, selector = mangazip.extract_image_urls(
+        urls, _title, selector = mangaripper.extract_image_urls(
             html, "https://sitio.example/cap/1"
         )
         self.assertEqual(urls, ["https://cdn.example/01.jpg"])
@@ -158,7 +158,7 @@ class ExtractImageTests(unittest.TestCase):
           <img data-src="https://cdn.example/02.jpg">
         </div>
         """
-        urls, _title, selector = mangazip.extract_image_urls(
+        urls, _title, selector = mangaripper.extract_image_urls(
             html, "https://sitio.example/cap/1", ".reader-area"
         )
         self.assertEqual(len(urls), 2)
@@ -171,18 +171,18 @@ class ExtractImageTests(unittest.TestCase):
           <img src="https://cdn.example/01.jpg">
         </div>
         """
-        urls, _title, _selector = mangazip.extract_image_urls(
+        urls, _title, _selector = mangaripper.extract_image_urls(
             html, "https://sitio.example/cap/1", ".reader-area img"
         )
         self.assertEqual(urls, ["https://cdn.example/01.jpg"])
 
     def test_invalid_selector_raises_value_error(self):
         with self.assertRaises(ValueError):
-            mangazip.extract_image_urls("<img>", "https://sitio.example/", "[")
+            mangaripper.extract_image_urls("<img>", "https://sitio.example/", "[")
 
     def test_selector_without_matches_raises_value_error(self):
         with self.assertRaises(ValueError):
-            mangazip.extract_image_urls(
+            mangaripper.extract_image_urls(
                 "<img>", "https://sitio.example/", ".no-existe img"
             )
 
@@ -190,20 +190,20 @@ class ExtractImageTests(unittest.TestCase):
 class DecodeHtmlTests(unittest.TestCase):
     def test_utf8(self):
         self.assertIn(
-            "Capítulo", mangazip.decode_html("<title>Capítulo</title>".encode("utf-8"))
+            "Capítulo", mangaripper.decode_html("<title>Capítulo</title>".encode("utf-8"))
         )
 
     def test_declared_latin1(self):
         html = (
             '<meta charset="iso-8859-1"><title>Capítulo</title>'.encode("latin-1")
         )
-        self.assertIn("Capítulo", mangazip.decode_html(html))
+        self.assertIn("Capítulo", mangaripper.decode_html(html))
 
     def test_cp1252_fallback(self):
-        self.assertIn("Capítulo", mangazip.decode_html("Capítulo".encode("cp1252")))
+        self.assertIn("Capítulo", mangaripper.decode_html("Capítulo".encode("cp1252")))
 
     def test_invalid_bytes_do_not_crash(self):
-        self.assertIsInstance(mangazip.decode_html(b"\xff\xfe<title>x</title>"), str)
+        self.assertIsInstance(mangaripper.decode_html(b"\xff\xfe<title>x</title>"), str)
 
 
 class FakeResponse:
@@ -243,24 +243,24 @@ class ReadLimitedTests(unittest.TestCase):
     def test_reads_all_chunks(self):
         response = FakeResponse(200, [b"abc", b"def"])
         self.assertEqual(
-            mangazip.read_limited(response, 100, threading.Event()), b"abcdef"
+            mangaripper.read_limited(response, 100, threading.Event()), b"abcdef"
         )
 
     def test_rejects_oversized_content(self):
         response = FakeResponse(200, [b"a" * 101])
         with self.assertRaises(ValueError):
-            mangazip.read_limited(response, 100, threading.Event())
+            mangaripper.read_limited(response, 100, threading.Event())
 
     def test_cancel_interrupts_reading(self):
         event = threading.Event()
         event.set()
         with self.assertRaises(InterruptedError):
-            mangazip.read_limited(FakeResponse(200, [b"abc"]), 100, event)
+            mangaripper.read_limited(FakeResponse(200, [b"abc"]), 100, event)
 
 
 class RequestWithRetriesTests(unittest.TestCase):
     def _call(self, session, **kwargs):
-        return mangazip.request_with_retries(
+        return mangaripper.request_with_retries(
             session,
             "https://cdn.example/01.jpg",
             {},
@@ -305,7 +305,7 @@ class RequestWithRetriesTests(unittest.TestCase):
         event.set()
         session = FakeSession([])
         with self.assertRaises(InterruptedError):
-            mangazip.request_with_retries(
+            mangaripper.request_with_retries(
                 session,
                 "https://cdn.example/01.jpg",
                 {},
@@ -328,7 +328,7 @@ class SaveImageTests(unittest.TestCase):
         Image.new("RGBA", (12, 8), (10, 20, 30, 128)).save(buffer, "PNG")
         with TemporaryDirectory() as folder:
             destination = Path(folder) / "01.png"
-            size = mangazip.save_image_as_png(buffer.getvalue(), destination)
+            size = mangaripper.save_image_as_png(buffer.getvalue(), destination)
             self.assertEqual(size, (12, 8))
             with Image.open(destination) as saved:
                 self.assertEqual(saved.format, "PNG")
@@ -340,7 +340,7 @@ class SaveImageTests(unittest.TestCase):
         Image.new("RGB", (20, 10), "red").save(buffer, "JPEG")
         with TemporaryDirectory() as folder:
             destination = Path(folder) / "01.png"
-            size = mangazip.save_image_as_png(buffer.getvalue(), destination)
+            size = mangaripper.save_image_as_png(buffer.getvalue(), destination)
             self.assertEqual(size, (20, 10))
             with Image.open(destination) as saved:
                 self.assertEqual(saved.format, "PNG")
@@ -355,21 +355,21 @@ class SaveImageTests(unittest.TestCase):
         with TemporaryDirectory() as folder:
             destination = Path(folder) / "01.png"
             self.assertEqual(
-                mangazip.save_image_as_png(buffer.getvalue(), destination),
+                mangaripper.save_image_as_png(buffer.getvalue(), destination),
                 (10, 30),
             )
 
     def test_rejects_invalid_image(self):
         with TemporaryDirectory() as folder:
             with self.assertRaises(UnidentifiedImageError):
-                mangazip.save_image_as_png(
+                mangaripper.save_image_as_png(
                     b"no soy una imagen", Path(folder) / "01.png"
                 )
 
 
 class CleanupTempTests(unittest.TestCase):
     def test_removes_temp_directory(self):
-        app = mangazip.MangaZIPApp.__new__(mangazip.MangaZIPApp)
+        app = mangaripper.MangaripperApp.__new__(mangaripper.MangaripperApp)
         app.worker = None
         app.cancel_event = threading.Event()
         with TemporaryDirectory() as folder:
@@ -380,7 +380,7 @@ class CleanupTempTests(unittest.TestCase):
         self.assertIsNone(app.current_temp_dir)
 
     def test_cancels_and_joins_worker(self):
-        app = mangazip.MangaZIPApp.__new__(mangazip.MangaZIPApp)
+        app = mangaripper.MangaripperApp.__new__(mangaripper.MangaripperApp)
         app.cancel_event = threading.Event()
         app.current_temp_dir = None
         started = threading.Event()
@@ -409,7 +409,7 @@ class I18nTests(unittest.TestCase):
     def test_switches_language(self):
         i18n.set_language("es")
         self.assertEqual(i18n.t("ui.cancel"), "Cancelar")
-        self.assertEqual(i18n.t("app.title"), "MangaZIP — Descargador de capítulos")
+        self.assertEqual(i18n.t("app.title"), "Mangaripper — Descargador de capítulos")
         i18n.set_language("en")
         self.assertEqual(i18n.t("ui.cancel"), "Cancel")
 
@@ -445,7 +445,7 @@ class I18nTests(unittest.TestCase):
     def test_spanish_translates_errors(self):
         i18n.set_language("es")
         with self.assertRaises(ValueError) as context:
-            mangazip.extract_image_urls("<img>", "https://a.example/", "[")
+            mangaripper.extract_image_urls("<img>", "https://a.example/", "[")
         self.assertIn("Selector CSS no válido", str(context.exception))
 
 
