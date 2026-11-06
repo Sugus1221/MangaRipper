@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import threading
 import unittest
+import unittest.mock
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
 from PIL import Image, UnidentifiedImageError
 
 import mangazip
+import mangazip_i18n as i18n
+
+
+def setUpModule():
+    """Run all core tests with the English locale for deterministic texts."""
+    i18n.set_language("en")
 
 
 class CleanNameTests(unittest.TestCase):
@@ -26,8 +34,8 @@ class CleanNameTests(unittest.TestCase):
         self.assertEqual(len(mangazip.clean_name("x" * 500)), 120)
 
     def test_fallback_for_empty_value(self):
-        self.assertEqual(mangazip.clean_name("   ", "capitulo"), "capitulo")
-        self.assertEqual(mangazip.clean_name("...", "capitulo"), "capitulo")
+        self.assertEqual(mangazip.clean_name("   ", "chapter"), "chapter")
+        self.assertEqual(mangazip.clean_name("...", "chapter"), "chapter")
 
     def test_escapes_windows_reserved_names(self):
         self.assertEqual(mangazip.clean_name("CON"), "_CON")
@@ -104,7 +112,7 @@ class ExtractImageTests(unittest.TestCase):
         self.assertEqual(
             urls, ["https://cdn.example/01.jpg", "https://cdn.example/02.jpg"]
         )
-        self.assertEqual(title, "capitulo")
+        self.assertEqual(title, "chapter")
         self.assertEqual(selector, ".reader-area img")
 
     def test_auto_detects_reader_selector(self):
@@ -133,7 +141,7 @@ class ExtractImageTests(unittest.TestCase):
             html, "https://sitio.example/cap/1"
         )
         self.assertEqual(urls, ["https://cdn.example/01.jpg"])
-        self.assertEqual(selector, "img (detección automática)")
+        self.assertEqual(selector, "img (auto-detection)")
 
     def test_generic_fallback_keeps_single_page(self):
         html = '<body><img class="page" src="https://cdn.example/01.jpg"></body>'
@@ -141,7 +149,7 @@ class ExtractImageTests(unittest.TestCase):
             html, "https://sitio.example/cap/1"
         )
         self.assertEqual(urls, ["https://cdn.example/01.jpg"])
-        self.assertEqual(selector, "img (detección automática)")
+        self.assertEqual(selector, "img (auto-detection)")
 
     def test_selector_can_target_container(self):
         html = """
@@ -341,7 +349,7 @@ class SaveImageTests(unittest.TestCase):
     def test_applies_exif_orientation(self):
         image = Image.new("RGB", (30, 10), "red")
         exif = image.getexif()
-        exif[274] = 6  # girar 90 grados
+        exif[274] = 6  # rotate 90 degrees
         buffer = BytesIO()
         image.save(buffer, "JPEG", exif=exif)
         with TemporaryDirectory() as folder:
@@ -386,6 +394,59 @@ class CleanupTempTests(unittest.TestCase):
         started.wait(1)
         app.cleanup_temp()
         self.assertFalse(app.worker.is_alive())
+
+
+class I18nTests(unittest.TestCase):
+    def tearDown(self):
+        i18n.set_language("en")
+
+    def test_every_language_has_the_same_keys(self):
+        base_keys = set(i18n.TRANSLATIONS["en"])
+        for code, strings in i18n.TRANSLATIONS.items():
+            self.assertEqual(set(strings), base_keys, f"language {code}")
+        self.assertEqual(set(i18n.LANGUAGES), set(i18n.TRANSLATIONS))
+
+    def test_switches_language(self):
+        i18n.set_language("es")
+        self.assertEqual(i18n.t("ui.cancel"), "Cancelar")
+        self.assertEqual(i18n.t("app.title"), "MangaZIP — Descargador de capítulos")
+        i18n.set_language("en")
+        self.assertEqual(i18n.t("ui.cancel"), "Cancel")
+
+    def test_unknown_code_falls_back_to_english(self):
+        i18n.set_language("xx")
+        self.assertEqual(i18n.get_language(), "en")
+        self.assertEqual(i18n.t("ui.cancel"), "Cancel")
+
+    def test_missing_key_falls_back_to_the_key(self):
+        self.assertEqual(i18n.t("key.that.does.not.exist"), "key.that.does.not.exist")
+
+    def test_interpolates_values(self):
+        i18n.set_language("es")
+        text = i18n.t("status.downloading", current=2, total=5)
+        self.assertIn("página 2 de 5", text)
+
+    def test_current_language_name_is_shown(self):
+        code = i18n.get_language()
+        self.assertIn(i18n.LANGUAGES[code], list(i18n.LANGUAGES.values()))
+
+    def test_save_and_load_language_roundtrip(self):
+        with TemporaryDirectory() as folder:
+            config_file = Path(folder) / "settings.json"
+            with unittest.mock.patch.object(i18n, "CONFIG_FILE", config_file):
+                self.assertEqual(i18n.load_language(), "en")  # no file yet
+                i18n.save_language("es")
+                self.assertEqual(i18n.load_language(), "es")
+                i18n.save_language("xx")  # ignored
+                self.assertEqual(i18n.load_language(), "es")
+                config_file.write_text("not json", encoding="utf-8")
+                self.assertEqual(i18n.load_language(), "en")
+
+    def test_spanish_translates_errors(self):
+        i18n.set_language("es")
+        with self.assertRaises(ValueError) as context:
+            mangazip.extract_image_urls("<img>", "https://a.example/", "[")
+        self.assertIn("Selector CSS no válido", str(context.exception))
 
 
 if __name__ == "__main__":

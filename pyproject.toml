@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mangaripper"
 version = "0.1.0"
-description = "MangaZIP: descarga capítulos públicos y los empaqueta en un ZIP de PNG"
-readme = "LEEME.md"
+description = "MangaZIP: download public chapters and pack them into a PNG ZIP"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31.0",
@@ -23,7 +23,7 @@ dev = ["pytest>=8.0", "pylint>=3.0"]
 mangazip = "mangazip:main"
 
 [tool.setuptools]
-py-modules = ["mangazip"]
+py-modules = ["mangazip", "mangazip_i18n"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

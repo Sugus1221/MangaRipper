@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""MangaZIP: GUI sencilla para guardar imágenes de un capítulo accesible en un ZIP.
+"""MangaZIP: a small GUI to save the images of an accessible chapter into a ZIP.
 
-Uso responsable: descarga únicamente imágenes que la página entregue normalmente.
-No intenta saltarse inicios de sesión, captchas, DRM ni protecciones de acceso.
+Responsible use: download only images the page serves normally.
+It does not try to bypass logins, captchas, DRM, or access protections.
 """
 from __future__ import annotations
 
@@ -28,13 +28,22 @@ from soupsieve import SelectorSyntaxError
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from mangazip_i18n import (
+    LANGUAGES,
+    get_language,
+    load_language,
+    save_language,
+    set_language,
+    t,
+)
+
 APP_NAME = "MangaZIP"
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 )
 LogFn = Callable[[str], None]
-# Atributos de lazy loading, en orden de prioridad sobre el placeholder de `src`.
+# Lazy-loading attributes, in priority order over the `src` placeholder.
 IMAGE_ATTRS = (
     "data-src", "data-original", "data-lazy-src", "data-url", "data-cfsrc",
     "data-ks-lazyload", "data-echo",
@@ -57,7 +66,7 @@ READER_SELECTORS = (
     "article img",
 )
 
-# Límites de seguridad y cortesía con el servidor.
+# Safety limits and server-friendly behaviour.
 MAX_IMAGES = 1000
 MAX_IMAGE_BYTES = 40 * 1024 * 1024
 MAX_HTML_BYTES = 8 * 1024 * 1024
@@ -72,7 +81,7 @@ WINDOWS_RESERVED = frozenset(
 )
 
 
-def clean_name(value: str, fallback: str = "capitulo") -> str:
+def clean_name(value: str, fallback: str = "chapter") -> str:
     value = re.sub(r"[\x00-\x1f<>:\"/\\|?*]", "_", value or "")
     value = re.sub(r"\s+", " ", value).strip(" ._-\t\n")
     value = value[:120].strip(" ._-\t\n")
@@ -94,7 +103,7 @@ def normalize_url(value: str, base_url: str) -> str | None:
 
 
 def parse_srcset(value: str, base_url: str) -> list[str]:
-    """Devuelve candidatos srcset en el orden declarado, de menor a mayor calidad."""
+    """Return srcset candidates in declared order, usually smallest to largest."""
     result = []
     for part in (value or "").split(","):
         item = part.strip().split()
@@ -106,11 +115,11 @@ def parse_srcset(value: str, base_url: str) -> list[str]:
 
 
 def attrs_from_element(element, base_url: str) -> list[str]:
-    """Devuelve candidatos en orden de prioridad.
+    """Return candidates in priority order.
 
-    Primero los atributos de lazy loading (el `src` suele ser un placeholder),
-    después la mejor variante de `srcset`, luego `src` y, por último, un
-    `background-image` incrustado en el estilo.
+    Lazy-loading attributes come first (the `src` is often a placeholder),
+    then the best `srcset` variant, then `src`, and finally an inline
+    `background-image`.
     """
     found = []
     attrs = getattr(element, "attrs", {}) or {}
@@ -129,7 +138,7 @@ def attrs_from_element(element, base_url: str) -> list[str]:
     for attr in SRCSET_ATTRS:
         candidates = parse_srcset(attr_text(attr), base_url)
         if candidates:
-            # Suele ser la variante de mayor tamaño declarada.
+            # Usually the largest declared variant.
             found.append(candidates[-1])
 
     url = normalize_url(attr_text("src"), base_url)
@@ -161,11 +170,14 @@ def extract_image_urls(
     page_url: str,
     css_selector: str = "",
 ) -> tuple[list[str], str, str]:
-    """Extrae las URLs de las páginas y devuelve (urls, título, selector usado)."""
+    """Extract page URLs and return (urls, title, selector used)."""
     soup = BeautifulSoup(html, "html.parser")
-    title = soup.title.get_text(" ", strip=True) if soup.title else "capitulo"
+    fallback_title = t("fallback.chapter")
+    title = (
+        soup.title.get_text(" ", strip=True) if soup.title else fallback_title
+    )
     if not title:
-        title = "capitulo"
+        title = fallback_title
 
     selected = []
     selector_used = ""
@@ -174,14 +186,11 @@ def extract_image_urls(
             selected = soup.select(css_selector.strip())
             selector_used = css_selector.strip()
         except SelectorSyntaxError as exc:
-            raise ValueError(f"Selector CSS no válido: {exc}") from exc
+            raise ValueError(t("error.invalid_selector", error=exc)) from exc
         if not selected:
-            raise ValueError(
-                "El selector CSS no encontró elementos. "
-                "Prueba otro selector, por ejemplo: .reader-area img"
-            )
+            raise ValueError(t("error.selector_no_match"))
     else:
-        # Preferimos una zona de lectura conocida; así se evitan iconos, portadas y anuncios.
+        # Prefer a known reader area to avoid icons, covers, and adverts.
         best = []
         for selector in READER_SELECTORS:
             try:
@@ -194,23 +203,24 @@ def extract_image_urls(
         if len(best) >= 2:
             selected = best
         else:
-            # Fallback genérico: imágenes de la página, filtrando decoración.
+            # Generic fallback: page images, filtering out decoration.
             selected = [
                 img
                 for img in soup.find_all(["img", "source"])
                 if img.name == "source" or is_likely_reader_image(img)
             ]
-            selector_used = "img (detección automática)"
+            selector_used = t("selector.generic")
 
     urls: list[str] = []
     seen: set[str] = set()
     for element in selected:
-        # Si el selector encuentra contenedores, mirar también imágenes descendientes.
+        # If the selector matches containers, also inspect descendant images.
         elements = [element]
         if getattr(element, "name", None) not in ("img", "source"):
             elements.extend(element.find_all(["img", "source"]))
         for item in elements:
-            if getattr(item, "name", None) == "img" and not css_selector.strip() and not is_likely_reader_image(item):
+            is_img = getattr(item, "name", None) == "img"
+            if is_img and not css_selector.strip() and not is_likely_reader_image(item):
                 continue
             candidates = attrs_from_element(item, page_url)
             if candidates:
@@ -223,17 +233,17 @@ def extract_image_urls(
 
 
 def save_image_as_png(content: bytes, destination: Path) -> tuple[int, int]:
-    """Guarda la imagen como PNG sin recompresión con pérdida.
+    """Save the image as PNG without lossy re-compression.
 
-    PNG no recupera la calidad ya perdida en un JPEG/WebP; conserva los píxeles
-    decodificados. Las fuentes animadas se guardan con el primer fotograma.
+    PNG cannot restore quality already lost in a JPEG/WebP source; it keeps the
+    decoded pixels. Animated sources are saved using their first frame.
     """
     with Image.open(BytesIO(content)) as original:
         original.seek(0)
         original.load()
         image = ImageOps.exif_transpose(original)
 
-        # Mantener los modos compatibles con PNG para no convertir píxeles de más.
+        # Keep PNG-compatible modes to avoid unnecessary pixel conversions.
         png_modes = {"1", "L", "LA", "P", "RGB", "RGBA", "I", "I;16", "I;16B", "I;16L"}
         if image.mode not in png_modes:
             has_alpha = (
@@ -244,7 +254,7 @@ def save_image_as_png(content: bytes, destination: Path) -> tuple[int, int]:
             image = image.convert("RGBA" if has_alpha else "RGB")
 
         save_options = {"format": "PNG", "optimize": False, "compress_level": 3}
-        # Conservar metadatos de color cuando existan.
+        # Preserve colour metadata when present.
         if image.info.get("icc_profile"):
             save_options["icc_profile"] = image.info["icc_profile"]
         if image.info.get("dpi"):
@@ -254,7 +264,7 @@ def save_image_as_png(content: bytes, destination: Path) -> tuple[int, int]:
 
 
 def decode_html(content: bytes) -> str:
-    """Decodifica el HTML respetando el charset declarado y con alternativas habituales."""
+    """Decode HTML using the declared charset and common fallbacks."""
     match = re.search(
         rb"<meta[^>]+charset\s*=\s*[\"']?([a-zA-Z0-9_\-]+)",
         content[:4096],
@@ -280,13 +290,13 @@ def read_limited(
     data = bytearray()
     for chunk in response.iter_content(65536):
         if cancel_event.is_set():
-            raise InterruptedError("Descarga cancelada por el usuario.")
+            raise InterruptedError(t("log.cancelled"))
         if not chunk:
             continue
         data.extend(chunk)
         if len(data) > max_bytes:
             raise ValueError(
-                f"el archivo supera el límite de {max_bytes // (1024 * 1024)} MB"
+                t("error.too_large", limit=max_bytes // (1024 * 1024))
             )
     return bytes(data)
 
@@ -302,11 +312,11 @@ def request_with_retries(
     timeout: tuple[int, int] = (12, 45),
     backoff: float = RETRY_BACKOFF,
 ) -> tuple[bytes, str]:
-    """Descarga con reintentos y backoff ante errores transitorios."""
+    """Download with retries and backoff for transient errors."""
     last_exc: Exception | None = None
     for attempt in range(1, REQUEST_ATTEMPTS + 1):
         if cancel_event.is_set():
-            raise InterruptedError("Descarga cancelada por el usuario.")
+            raise InterruptedError(t("log.cancelled"))
         try:
             with session.get(url, headers=headers, timeout=timeout, stream=True) as response:
                 if response.status_code in RETRY_STATUS and attempt < REQUEST_ATTEMPTS:
@@ -323,12 +333,20 @@ def request_with_retries(
             if attempt >= REQUEST_ATTEMPTS or not retryable:
                 break
             delay = backoff * (2 ** (attempt - 1))
-            log(f"Reintento {attempt + 1}/{REQUEST_ATTEMPTS} en {delay:.1f}s ({exc})")
+            log(
+                t(
+                    "log.retry",
+                    attempt=attempt + 1,
+                    attempts=REQUEST_ATTEMPTS,
+                    delay=delay,
+                    error=exc,
+                )
+            )
             if cancel_event.wait(delay):
-                raise InterruptedError("Descarga cancelada por el usuario.") from exc
+                raise InterruptedError(t("log.cancelled")) from exc
     if last_exc is not None:
         raise last_exc
-    raise RuntimeError("La petición falló sin un error concreto.")
+    raise RuntimeError(t("error.request_failed"))
 
 
 def fetch_html(
@@ -337,33 +355,34 @@ def fetch_html(
     log: LogFn,
     cancel_event: threading.Event,
 ) -> tuple[str, requests.Session]:
+    """Fetch the chapter HTML with requests or optionally with Playwright."""
+    language = get_language()
+    ui_locale = "es-ES" if language == "es" else "en-US"
+    accept_language = (
+        "es-ES,es;q=0.9,en;q=0.7" if language == "es" else "en-US,en;q=0.9,es;q=0.7"
+    )
     session = requests.Session()
     session.headers.update({
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.7",
+        "Accept-Language": accept_language,
     })
     if use_browser:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
-            raise RuntimeError(
-                "Has marcado la opción de JavaScript, pero Playwright no está instalado.\n"
-                "Instálalo con: python -m pip install playwright\n"
-                "Y después: python -m playwright install chromium\n"
-                "O desmarca esa casilla para usar la descarga HTML normal."
-            ) from exc
-        log("Abriendo la página con Chromium para cargar JavaScript…")
+            raise RuntimeError(t("error.playwright_missing")) from exc
+        log(t("log.opening_chromium"))
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=USER_AGENT, locale="es-ES")
+            context = browser.new_context(user_agent=USER_AGENT, locale=ui_locale)
             page = context.new_page()
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 page.wait_for_timeout(1800)
                 if cancel_event.is_set():
-                    raise InterruptedError("Descarga cancelada por el usuario.")
-                # Activar lazy-loading sin pulsar controles ni intentar resolver protecciones.
+                    raise InterruptedError(t("log.cancelled"))
+                # Trigger lazy loading without clicking controls or bypassing protections.
                 for _ in range(5):
                     page.evaluate("window.scrollBy(0, Math.max(window.innerHeight, 700))")
                     page.wait_for_timeout(450)
@@ -376,7 +395,7 @@ def fetch_html(
                 browser.close()
         return html, session
 
-    log("Leyendo el HTML del capítulo…")
+    log(t("log.reading_html"))
     content, content_type = request_with_retries(
         session,
         url,
@@ -387,16 +406,32 @@ def fetch_html(
         timeout=(12, 35),
     )
     if "text/html" not in content_type.lower() and "application/xhtml" not in content_type.lower():
-        log(f"Aviso: el servidor devuelve Content-Type {content_type or '(no indicado)'}.")
+        log(
+            t(
+                "log.content_type_warning",
+                content_type=content_type or t("log.content_type_none"),
+            )
+        )
     return decode_html(content), session
 
 
+def default_output_dir() -> Path:
+    """Prefer the user's real download folder, whatever its language."""
+    home = Path.home()
+    for name in ("Downloads", "Descargas"):
+        folder = home / name
+        if folder.is_dir():
+            return folder / "MangaZIP"
+    return home / "Downloads" / "MangaZIP"
+
+
 class MangaZIPApp:
-    """Ventana principal: formulario, progreso y registro de la descarga."""
+    """Main window: form, progress, and download log."""
 
     def __init__(self, root: tk.Tk) -> None:
+        set_language(load_language())
         self.root = root
-        self.root.title("MangaZIP — Descargador de capítulos")
+        self.root.title(t("app.title"))
         self.root.geometry("760x600")
         self.root.minsize(650, 520)
         self.events: queue.Queue[tuple] = queue.Queue()
@@ -404,12 +439,14 @@ class MangaZIPApp:
         self.worker: threading.Thread | None = None
         self.current_temp_dir: Path | None = None
         self._closing = False
-        self.output_dir = tk.StringVar(value=str(Path.home() / "Descargas" / "MangaZIP"))
+        self.output_dir = tk.StringVar(value=str(default_output_dir()))
         self.url_var = tk.StringVar()
         self.selector_var = tk.StringVar()
         self.zipname_var = tk.StringVar()
         self.browser_var = tk.BooleanVar(value=False)
-        self.status_var = tk.StringVar(value="Listo para descargar un capítulo.")
+        self.language_var = tk.StringVar(value=LANGUAGES[get_language()])
+        self._language_codes = {name: code for code, name in LANGUAGES.items()}
+        self.status_var = tk.StringVar(value=t("status.ready"))
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._poll_events)
@@ -418,71 +455,88 @@ class MangaZIPApp:
         content = ttk.Frame(self.root, padding=16)
         content.pack(fill="both", expand=True)
 
+        header = ttk.Frame(content)
+        header.pack(fill="x")
         ttk.Label(
-            content,
+            header,
             text="MangaZIP",
             font=("TkDefaultFont", 18, "bold"),
-        ).pack(anchor="w")
-        ttk.Label(
-            content,
-            text=(
-                "Pega la URL de un capítulo y crea un ZIP con todas las páginas "
-                "en PNG sin recompresión con pérdida."
-            ),
-        ).pack(anchor="w", pady=(2, 14))
+        ).pack(side="left")
+        language_row = ttk.Frame(header)
+        language_row.pack(side="right")
+        self.language_label = ttk.Label(language_row, text=t("ui.language"))
+        self.language_label.pack(side="left", padx=(0, 6))
+        self.language_box = ttk.Combobox(
+            language_row,
+            textvariable=self.language_var,
+            state="readonly",
+            width=10,
+            values=list(self._language_codes),
+        )
+        self.language_box.pack(side="left")
+        self.language_box.bind("<<ComboboxSelected>>", self._on_language_change)
 
-        ttk.Label(content, text="URL del capítulo").pack(anchor="w")
+        self.subtitle_label = ttk.Label(content, text=t("app.subtitle"))
+        self.subtitle_label.pack(anchor="w", pady=(10, 14))
+
+        self.url_label = ttk.Label(content, text=t("ui.url"))
+        self.url_label.pack(anchor="w")
         self.url_entry = ttk.Entry(content, textvariable=self.url_var)
         self.url_entry.pack(fill="x", pady=(4, 12))
 
-        ttk.Label(content, text="Carpeta de destino").pack(anchor="w")
+        self.folder_label = ttk.Label(content, text=t("ui.folder"))
+        self.folder_label.pack(anchor="w")
         folder_row = ttk.Frame(content)
         folder_row.pack(fill="x", pady=(4, 12))
         ttk.Entry(folder_row, textvariable=self.output_dir).pack(
             side="left", fill="x", expand=True
         )
-        ttk.Button(folder_row, text="Elegir…", command=self._choose_folder).pack(
-            side="left", padx=(8, 0)
+        self.choose_button = ttk.Button(
+            folder_row, text=t("ui.choose"), command=self._choose_folder
         )
+        self.choose_button.pack(side="left", padx=(8, 0))
 
-        ttk.Label(content, text="Nombre del ZIP (opcional; sin .zip)").pack(anchor="w")
+        self.zipname_label = ttk.Label(content, text=t("ui.zipname"))
+        self.zipname_label.pack(anchor="w")
         ttk.Entry(content, textvariable=self.zipname_var).pack(fill="x", pady=(4, 12))
 
-        ttk.Label(
-            content,
-            text="Selector CSS opcional (para ajustar una web concreta)",
-        ).pack(anchor="w")
+        self.selector_label = ttk.Label(content, text=t("ui.selector"))
+        self.selector_label.pack(anchor="w")
         ttk.Entry(content, textvariable=self.selector_var).pack(fill="x", pady=(4, 4))
-        ttk.Label(
+        self.selector_hint = ttk.Label(
             content,
-            text="Vacío = detección automática. Ejemplo: .reader-area img",
+            text=t("ui.selector_hint"),
             foreground="#666666",
-        ).pack(anchor="w", pady=(0, 8))
+        )
+        self.selector_hint.pack(anchor="w", pady=(0, 8))
 
-        ttk.Checkbutton(
+        self.browser_check = ttk.Checkbutton(
             content,
-            text="Renderizar JavaScript con Chromium (requiere Playwright)",
+            text=t("ui.use_browser"),
             variable=self.browser_var,
-        ).pack(anchor="w", pady=(0, 10))
+        )
+        self.browser_check.pack(anchor="w", pady=(0, 10))
 
         buttons = ttk.Frame(content)
         buttons.pack(fill="x", pady=(0, 10))
         self.download_btn = ttk.Button(
-            buttons, text="Descargar y crear ZIP", command=self._start_download
+            buttons, text=t("ui.download"), command=self._start_download
         )
         self.download_btn.pack(side="left")
         self.cancel_btn = ttk.Button(
-            buttons, text="Cancelar", command=self._cancel, state="disabled"
+            buttons, text=t("ui.cancel"), command=self._cancel, state="disabled"
         )
         self.cancel_btn.pack(side="left", padx=(8, 0))
-        ttk.Button(buttons, text="Abrir carpeta", command=self._open_folder).pack(
-            side="right"
+        self.open_folder_btn = ttk.Button(
+            buttons, text=t("ui.open_folder"), command=self._open_folder
         )
+        self.open_folder_btn.pack(side="right")
 
         self.progress = ttk.Progressbar(content, mode="determinate", maximum=100)
         self.progress.pack(fill="x", pady=(0, 6))
         ttk.Label(content, textvariable=self.status_var).pack(anchor="w", pady=(0, 6))
-        ttk.Label(content, text="Registro").pack(anchor="w")
+        self.log_label = ttk.Label(content, text=t("ui.log"))
+        self.log_label.pack(anchor="w")
 
         log_frame = ttk.Frame(content)
         log_frame.pack(fill="both", expand=True, pady=(4, 0))
@@ -500,6 +554,34 @@ class MangaZIPApp:
         self.log_text.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+    def _retranslate(self) -> None:
+        """Update every visible translatable widget for the current locale."""
+        self.root.title(t("app.title"))
+        self.language_label.configure(text=t("ui.language"))
+        self.subtitle_label.configure(text=t("app.subtitle"))
+        self.url_label.configure(text=t("ui.url"))
+        self.folder_label.configure(text=t("ui.folder"))
+        self.choose_button.configure(text=t("ui.choose"))
+        self.zipname_label.configure(text=t("ui.zipname"))
+        self.selector_label.configure(text=t("ui.selector"))
+        self.selector_hint.configure(text=t("ui.selector_hint"))
+        self.browser_check.configure(text=t("ui.use_browser"))
+        self.download_btn.configure(text=t("ui.download"))
+        self.cancel_btn.configure(text=t("ui.cancel"))
+        self.open_folder_btn.configure(text=t("ui.open_folder"))
+        self.log_label.configure(text=t("ui.log"))
+        if not (self.worker and self.worker.is_alive()):
+            self.status_var.set(t("status.ready"))
+
+    def _on_language_change(self, _event=None) -> None:
+        name = self.language_var.get()
+        code = self._language_codes.get(name)
+        if not code or code == get_language():
+            return
+        set_language(code)
+        save_language(code)
+        self._retranslate()
+
     def _log(self, text: str) -> None:
         self.events.put(("log", text))
 
@@ -510,7 +592,10 @@ class MangaZIPApp:
         self.events.put(("progress", current, total))
 
     def _choose_folder(self) -> None:
-        chosen = filedialog.askdirectory(initialdir=self.output_dir.get() or str(Path.home()))
+        chosen = filedialog.askdirectory(
+            title=t("dialog.choose_folder"),
+            initialdir=self.output_dir.get() or str(Path.home()),
+        )
         if chosen:
             self.output_dir.set(chosen)
 
@@ -527,7 +612,7 @@ class MangaZIPApp:
             else:
                 subprocess.Popen(["xdg-open", str(folder)])
         except OSError as exc:
-            messagebox.showerror("No se pudo abrir", str(exc))
+            messagebox.showerror(t("dialog.open_failed_title"), str(exc))
 
     def _start_download(self) -> None:
         if self.worker and self.worker.is_alive():
@@ -535,15 +620,18 @@ class MangaZIPApp:
         url = self.url_var.get().strip()
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            messagebox.showwarning("URL no válida", "Pega una URL completa que empiece por https:// o http://")
+            messagebox.showwarning(
+                t("dialog.invalid_url_title"),
+                t("dialog.invalid_url"),
+            )
             return
         out = Path(self.output_dir.get()).expanduser()
         try:
             out.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             messagebox.showerror(
-                "Carpeta no válida",
-                f"No puedo crear la carpeta de destino:\n{exc}",
+                t("dialog.invalid_folder_title"),
+                t("dialog.invalid_folder", error=exc),
             )
             return
         self.cancel_event.clear()
@@ -551,7 +639,7 @@ class MangaZIPApp:
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
         self.progress.configure(value=0, maximum=100)
-        self.status_var.set("Iniciando…")
+        self.status_var.set(t("status.starting"))
         self.download_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.worker = threading.Thread(
@@ -569,7 +657,7 @@ class MangaZIPApp:
 
     def _cancel(self) -> None:
         self.cancel_event.set()
-        self.status_var.set("Cancelando… (se detendrá lo antes posible)")
+        self.status_var.set(t("status.cancelling"))
         self.cancel_btn.configure(state="disabled")
 
     def _download_worker(
@@ -584,31 +672,37 @@ class MangaZIPApp:
         try:
             html, session = fetch_html(url, use_browser, self._log, self.cancel_event)
             if self.cancel_event.is_set():
-                raise InterruptedError("Descarga cancelada.")
+                raise InterruptedError(t("log.cancelled"))
             image_urls, title, used_selector = extract_image_urls(html, url, selector)
-            self._log(f"Título detectado: {title}")
-            self._log(f"Selector usado: {used_selector or 'automático'}")
-            if not image_urls:
-                raise RuntimeError(
-                    "No he encontrado imágenes en el HTML recibido. Puede que la web necesite JavaScript, "
-                    "un selector CSS concreto o que no permita la descarga automática.\n"
-                    "Prueba a activar la opción de Chromium o introduce un selector como .reader-area img."
+            self._log(t("log.title", title=title))
+            self._log(
+                t(
+                    "log.selector",
+                    selector=used_selector or t("selector.auto"),
                 )
+            )
+            if not image_urls:
+                raise RuntimeError(t("error.no_images"))
             if len(image_urls) > MAX_IMAGES:
                 self._log(
-                    f"Aviso: se han detectado {len(image_urls)} imágenes; "
-                    f"se descargarán solo las primeras {MAX_IMAGES}."
+                    t(
+                        "log.too_many_images",
+                        count=len(image_urls),
+                        limit=MAX_IMAGES,
+                    )
                 )
                 image_urls = image_urls[:MAX_IMAGES]
-            self._log(f"He encontrado {len(image_urls)} posibles páginas.")
+            self._log(t("log.found_pages", count=len(image_urls)))
             temp_dir = Path(tempfile.mkdtemp(prefix="mangazip_", dir=str(out)))
             self.current_temp_dir = temp_dir
             downloaded: list[Path] = []
             failed_count = 0
             for index, image_url in enumerate(image_urls, start=1):
                 if self.cancel_event.is_set():
-                    raise InterruptedError("Descarga cancelada por el usuario.")
-                self._status(f"Descargando página {index} de {len(image_urls)}…")
+                    raise InterruptedError(t("log.cancelled"))
+                self._status(
+                    t("status.downloading", current=index, total=len(image_urls))
+                )
                 self._progress(index - 1, len(image_urls))
                 try:
                     content, content_type = request_with_retries(
@@ -627,18 +721,26 @@ class MangaZIPApp:
                         (b"\xff\xd8\xff", b"\x89PNG", b"GIF8", b"RIFF")
                     )
                     if "text/html" in content_type and not is_image_magic:
-                        raise ValueError("el servidor devolvió HTML en vez de una imagen")
+                        raise ValueError(t("error.html_instead_of_image"))
                     if not content:
-                        raise ValueError("archivo vacío")
+                        raise ValueError(t("error.empty_file"))
                     filepath = temp_dir / f"{index:03d}.png"
                     try:
                         width, height = save_image_as_png(content, filepath)
                     except (UnidentifiedImageError, OSError, ValueError) as image_exc:
-                        raise ValueError(f"no se pudo decodificar la imagen: {image_exc}") from image_exc
+                        raise ValueError(
+                            t("error.decode_failed", error=image_exc)
+                        ) from image_exc
                     downloaded.append(filepath)
                     self._log(
-                        f"[{index:03d}/{len(image_urls):03d}] OK  "
-                        f"{filepath.name} ({width}×{height}, PNG)"
+                        t(
+                            "log.page_ok",
+                            index=index,
+                            total=len(image_urls),
+                            filename=filepath.name,
+                            width=width,
+                            height=height,
+                        )
                     )
                 except InterruptedError:
                     raise
@@ -649,47 +751,49 @@ class MangaZIPApp:
                     Image.DecompressionBombError,
                 ) as exc:
                     failed_count += 1
-                    self._log(f"[{index:03d}/{len(image_urls):03d}] ERROR  {exc}")
+                    self._log(
+                        t("log.page_error", index=index, total=len(image_urls), error=exc)
+                    )
                 self._progress(index, len(image_urls))
                 if self.cancel_event.wait(DOWNLOAD_DELAY):
-                    raise InterruptedError("Descarga cancelada por el usuario.")
+                    raise InterruptedError(t("log.cancelled"))
 
             if self.cancel_event.is_set():
-                raise InterruptedError("Descarga cancelada por el usuario.")
+                raise InterruptedError(t("log.cancelled"))
             if not downloaded:
-                raise RuntimeError("No se ha podido descargar ninguna imagen. Revisa el registro de errores.")
+                raise RuntimeError(t("error.no_downloads"))
 
-            chosen_name = clean_name(zipname, "") or clean_name(title, "capitulo")
+            chosen_name = clean_name(zipname, "") or clean_name(
+                title, t("fallback.chapter")
+            )
             zip_path = out / f"{chosen_name}.zip"
             if zip_path.exists():
                 zip_path = out / f"{chosen_name}_{time.strftime('%Y%m%d_%H%M%S')}.zip"
-            # Los PNG ya están comprimidos: volver a comprimirlos solo gasta CPU.
+            # PNG files are already compressed: re-compressing them wastes CPU.
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
                 for filepath in downloaded:
                     archive.write(filepath, arcname=filepath.name)
-            self._log(f"ZIP creado: {zip_path}")
-            self._log(f"Páginas guardadas como PNG: {len(downloaded)} de {len(image_urls)}.")
-            if failed_count:
-                self._log(
-                    f"Aviso: {failed_count} imágenes no se pudieron descargar."
-                )
-            summary = (
-                f"Terminado: {len(downloaded)} páginas convertidas a PNG "
-                f"sin recompresión con pérdida.\n\n{zip_path}"
+            self._log(t("log.zip_created", path=zip_path))
+            self._log(
+                t("log.pages_saved", saved=len(downloaded), total=len(image_urls))
             )
             if failed_count:
-                summary += (
-                    f"\n\nNo se pudieron descargar {failed_count} imágenes; "
-                    "consulta el registro."
-                )
-            self.events.put(("done", True, summary))
+                self._log(t("log.failed_warning", count=failed_count))
+            summary = t(
+                "summary.done",
+                saved=len(downloaded),
+                path=zip_path,
+            )
+            if failed_count:
+                summary += "\n\n" + t("summary.failed", count=failed_count)
+            self.events.put(("done", True, summary, False))
         except InterruptedError as exc:
             self._log(str(exc))
-            self.events.put(("done", False, str(exc)))
+            self.events.put(("done", False, str(exc), True))
         except Exception as exc:  # pylint: disable=broad-except
-            # Frontera del hilo: cualquier fallo inesperado debe llegar a la UI.
-            self._log(f"ERROR: {exc}")
-            self.events.put(("done", False, str(exc)))
+            # Thread boundary: any unexpected failure must reach the UI.
+            self._log(t("log.error", error=exc))
+            self.events.put(("done", False, str(exc), False))
         finally:
             if temp_dir and temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
@@ -698,13 +802,13 @@ class MangaZIPApp:
     def _on_close(self) -> None:
         if self.worker and self.worker.is_alive():
             if not messagebox.askyesno(
-                "Salir de MangaZIP",
-                "Hay una descarga en curso. ¿Quieres cancelarla y salir?",
+                t("dialog.close_title"),
+                t("dialog.close_running"),
             ):
                 return
             self._closing = True
             self.cancel_event.set()
-            self.status_var.set("Cancelando y cerrando…")
+            self.status_var.set(t("status.cancelling_close"))
             self.download_btn.configure(state="disabled")
             self.cancel_btn.configure(state="disabled")
             self.root.withdraw()
@@ -719,7 +823,7 @@ class MangaZIPApp:
             self.root.destroy()
 
     def cleanup_temp(self) -> None:
-        """Limpieza de último recurso al cerrar la aplicación."""
+        """Last-resort cleanup when shutting the application down."""
         if self.worker and self.worker.is_alive():
             self.cancel_event.set()
             self.worker.join(timeout=2.0)
@@ -743,16 +847,18 @@ class MangaZIPApp:
                     current, total = event[1], event[2]
                     self.progress.configure(maximum=max(total, 1), value=current)
                 elif kind == "done":
-                    ok, message = event[1], event[2]
+                    ok, message, cancelled = event[1], event[2], event[3]
                     if self._closing:
                         continue
                     self.download_btn.configure(state="normal")
                     self.cancel_btn.configure(state="disabled")
-                    self.status_var.set("Proceso finalizado." if ok else "Proceso detenido o fallido.")
+                    self.status_var.set(
+                        t("status.finished") if ok else t("status.failed")
+                    )
                     if ok:
-                        messagebox.showinfo("MangaZIP", message)
-                    elif message and message != "Descarga cancelada por el usuario.":
-                        messagebox.showerror("MangaZIP", message)
+                        messagebox.showinfo(t("dialog.title"), message)
+                    elif message and not cancelled:
+                        messagebox.showerror(t("dialog.title"), message)
         except queue.Empty:
             pass
         self.root.after(100, self._poll_events)
