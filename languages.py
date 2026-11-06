@@ -39,6 +39,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ui.cancel": "Cancel",
         "ui.open_folder": "Open folder",
         "ui.log": "Log",
+        "log.detail_file": "Detailed log: {path}",
+        "log.detail_file_error": "Could not create the detailed log: {error}",
         # Status line
         "status.ready": "Ready to download a chapter.",
         "status.no_folder": "No destination folder was selected.",
@@ -136,6 +138,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ui.cancel": "Cancelar",
         "ui.open_folder": "Abrir carpeta",
         "ui.log": "Registro",
+        "log.detail_file": "Registro detallado: {path}",
+        "log.detail_file_error": "No se pudo crear el registro detallado: {error}",
         # Estado
         "status.ready": "Listo para descargar un capítulo.",
         "status.no_folder": "No se ha elegido carpeta de destino.",

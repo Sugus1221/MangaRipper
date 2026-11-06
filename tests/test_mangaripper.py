@@ -322,6 +322,46 @@ class RequestWithRetriesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._call(session, max_bytes=1024)
 
+    def test_reports_details_to_callback(self):
+        details: list[str] = []
+        session = FakeSession([FakeResponse(200, [b"ok"])])
+        content, _content_type = mangaripper.request_with_retries(
+            session,
+            "https://cdn.example/01.jpg",
+            {},
+            threading.Event(),
+            lambda _message: None,
+            max_bytes=1024,
+            backoff=0,
+            detail=details.append,
+        )
+        self.assertEqual(content, b"ok")
+        joined = "\n".join(details)
+        self.assertIn("GET https://cdn.example/01.jpg", joined)
+        self.assertIn("HTTP 200", joined)
+        self.assertIn("2 bytes", joined)
+
+    def test_details_survive_a_retry(self):
+        details: list[str] = []
+        session = FakeSession(
+            [FakeResponse(503, [b"no"]), FakeResponse(200, [b"ok"])]
+        )
+        mangaripper.request_with_retries(
+            session,
+            "https://cdn.example/01.jpg",
+            {},
+            threading.Event(),
+            lambda _message: None,
+            max_bytes=1024,
+            backoff=0,
+            detail=details.append,
+        )
+        joined = "\n".join(details)
+        self.assertIn("attempt 1/3", joined)
+        self.assertIn("HTTP 503", joined)
+        self.assertIn("attempt 2/3", joined)
+        self.assertIn("retryable", joined)
+
 
 class SaveImageTests(unittest.TestCase):
     def test_preserves_rgba_png(self):
@@ -448,6 +488,56 @@ class I18nTests(unittest.TestCase):
         with self.assertRaises(ValueError) as context:
             mangaripper.extract_image_urls("<img>", "https://a.example/", "[")
         self.assertIn("Selector CSS no válido", str(context.exception))
+
+
+class DownloadLogTests(unittest.TestCase):
+    def test_writes_header_and_timestamped_details(self):
+        with TemporaryDirectory() as folder:
+            log = mangaripper.DownloadLog(
+                Path(folder), "example.org_cap-1", {"URL": "https://x/1"}
+            )
+            try:
+                log.detail("first line")
+            finally:
+                log.close()
+            text = log.path.read_text(encoding="utf-8")
+            self.assertIn("URL: https://x/1", text)
+            self.assertIn("first line", text)
+            self.assertRegex(text, r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\]")
+            self.assertTrue(log.path.name.endswith("_example.org_cap-1.log"))
+
+    def test_names_stay_unique_in_the_same_second(self):
+        with TemporaryDirectory() as folder:
+            first = mangaripper.DownloadLog(Path(folder), "same", {})
+            first.close()
+            second = mangaripper.DownloadLog(Path(folder), "same", {})
+            second.close()
+            self.assertNotEqual(first.path, second.path)
+
+    def test_creates_the_directory(self):
+        with TemporaryDirectory() as folder:
+            target = Path(folder) / "nested" / "logs"
+            log = mangaripper.DownloadLog(target, "x", {})
+            log.close()
+            self.assertTrue(target.is_dir())
+
+    def test_context_manager_closes_the_file(self):
+        with TemporaryDirectory() as folder:
+            with mangaripper.DownloadLog(Path(folder), "ctx", {}) as log:
+                log.detail("inside")
+            with self.assertRaises(ValueError):
+                log.detail("after close")
+
+
+class DefaultLogDirTests(unittest.TestCase):
+    def test_prefers_logs_folder_next_to_the_app(self):
+        with TemporaryDirectory() as folder:
+            with unittest.mock.patch.object(
+                mangaripper, "__file__", str(Path(folder) / "mangaripper.py")
+            ):
+                directory = mangaripper.default_log_dir()
+            self.assertEqual(directory, Path(folder) / "logs")
+            self.assertTrue(directory.is_dir())
 
 
 class ConfigDirTests(unittest.TestCase):

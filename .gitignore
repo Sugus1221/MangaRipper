@@ -22,6 +22,7 @@ htmlcov/
 # App output when using the project folder
 /Descargas/
 *.zip
+/logs/
 
 # OS files
 .DS_Store

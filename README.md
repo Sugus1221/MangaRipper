@@ -123,6 +123,29 @@ compressed, so compressing them again would only burn CPU for almost no gain.
 - Safety limits: 1.000 pages per chapter, 40 MB per image, and 8 MB of HTML.
 - Closing the window during a download cancels it and removes the temporary directory.
 
+### Detailed logs
+
+Every download writes its own log file into the `logs/` folder next to the
+application (one file per download: `YYYY-MM-DD_HH-MM-SS_<site>_<chapter>.log`).
+The log is highly detailed and timestamped, recording:
+
+- Where the download started: URL, destination folder, ZIP name, selector,
+  JavaScript mode, language, platform, Python/requests/Pillow versions.
+- Every HTTP request: attempt number, status code, `Content-Type`,
+  `Content-Length`, `Content-Encoding`, elapsed time and bytes received.
+- The detected title, selector and the complete list of image URLs.
+- Per page: path saved, pixel size, bytes on disk and per-page time.
+- Retries with their waits, and full tracebacks when something fails.
+- The final ZIP: path, size, entry count and total elapsed time.
+
+If the application is installed as a package and the project folder is
+read-only, logs fall back to the user data folder:
+`%LOCALAPPDATA%\Mangaripper\logs` (Windows),
+`~/Library/Application Support/Mangaripper/logs` (macOS) or
+`$XDG_DATA_HOME/Mangaripper/logs` (Linux/BSD).
+
+The `logs/` folder is ignored by git: logs stay on your machine.
+
 ## Languages
 
 The interface ships in English and Spanish. Switch language inside the app with the

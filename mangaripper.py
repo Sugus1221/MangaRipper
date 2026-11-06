@@ -8,6 +8,7 @@ It does not try to bypass logins, captchas, DRM, or access protections.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from io import BytesIO
 import os
 import platform
@@ -15,16 +16,18 @@ import queue
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import traceback
 import zipfile
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urldefrag
 
 import requests
 from bs4 import BeautifulSoup
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError, __version__ as PILLOW_VERSION
 from soupsieve import SelectorSyntaxError
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -39,6 +42,7 @@ from languages import (
 )
 
 APP_NAME = "Mangaripper"
+APP_VERSION = "0.1.0"
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
@@ -51,7 +55,9 @@ IMAGE_ATTRS = (
 )
 SRCSET_ATTRS = ("srcset", "data-srcset")
 READER_SELECTORS = (
-    ".reader-area img",                 # MangaFire y lectores similares
+    ".chapter-images img",            # MangaFire (contenedor principal observado)
+    ".reading-content .page-chapter img",  # MangaFire alternativa
+    ".reader-area img",               # MangaFire y lectores similares
     ".reading-content img",
     ".chapter-content img",
     ".reader-content img",
@@ -312,25 +318,59 @@ def request_with_retries(
     max_bytes: int,
     timeout: tuple[int, int] = (12, 45),
     backoff: float = RETRY_BACKOFF,
+    detail: LogFn | None = None,
 ) -> tuple[bytes, str]:
     """Download with retries and backoff for transient errors."""
     last_exc: Exception | None = None
     for attempt in range(1, REQUEST_ATTEMPTS + 1):
         if cancel_event.is_set():
+            if detail:
+                detail("Cancelled by the user before the request.")
             raise InterruptedError(t("log.cancelled"))
+        started = time.monotonic()
+        if detail:
+            detail(f"GET {url} (attempt {attempt}/{REQUEST_ATTEMPTS})")
         try:
             with session.get(url, headers=headers, timeout=timeout, stream=True) as response:
+                elapsed = time.monotonic() - started
+                if detail:
+                    headers_seen = response.headers
+                    detail(
+                        "  -> HTTP {status}{reason} | Content-Type: {ctype} | "
+                        "Content-Length: {length} | Content-Encoding: {encoding} | "
+                        "headers in {elapsed:.3f}s".format(
+                            status=response.status_code,
+                            reason=f" {response.reason}"
+                            if getattr(response, "reason", "")
+                            else "",
+                            ctype=headers_seen.get("Content-Type") or "-",
+                            length=headers_seen.get("Content-Length") or "-",
+                            encoding=headers_seen.get("Content-Encoding") or "-",
+                            elapsed=elapsed,
+                        )
+                    )
                 if response.status_code in RETRY_STATUS and attempt < REQUEST_ATTEMPTS:
                     raise requests.HTTPError(
                         f"HTTP {response.status_code}", response=response
                     )
                 response.raise_for_status()
                 content_type = response.headers.get("Content-Type", "")
-                return read_limited(response, max_bytes, cancel_event), content_type
+                body = read_limited(response, max_bytes, cancel_event)
+                if detail:
+                    detail(
+                        f"  -> received {len(body)} bytes in "
+                        f"{time.monotonic() - started:.3f}s"
+                    )
+                return body, content_type
         except requests.RequestException as exc:
             last_exc = exc
             status = exc.response.status_code if exc.response is not None else None
             retryable = status is None or status in RETRY_STATUS
+            if detail:
+                detail(
+                    f"  request failed: {exc!r} (status={status}, "
+                    f"retryable={retryable})"
+                )
             if attempt >= REQUEST_ATTEMPTS or not retryable:
                 break
             delay = backoff * (2 ** (attempt - 1))
@@ -343,7 +383,11 @@ def request_with_retries(
                     error=exc,
                 )
             )
+            if detail:
+                detail(f"  waiting {delay:.2f}s before retrying")
             if cancel_event.wait(delay):
+                if detail:
+                    detail("Cancelled by the user while waiting for a retry.")
                 raise InterruptedError(t("log.cancelled")) from exc
     if last_exc is not None:
         raise last_exc
@@ -355,8 +399,15 @@ def fetch_html(
     use_browser: bool,
     log: LogFn,
     cancel_event: threading.Event,
-) -> tuple[str, requests.Session]:
-    """Fetch the chapter HTML with requests or optionally with Playwright."""
+    *,
+    detail: LogFn | None = None,
+) -> tuple[str, requests.Session, list[str]]:
+    """Fetch the chapter HTML with requests or optionally with Playwright.
+    
+    Returns (html, session, captured_image_urls) where captured_image_urls
+    contains image URLs intercepted from network responses during Playwright
+    rendering (useful for sites with virtualized DOM like MangaFire).
+    """
     language = get_language()
     ui_locale = "es-ES" if language == "es" else "en-US"
     accept_language = (
@@ -368,33 +419,95 @@ def fetch_html(
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": accept_language,
     })
+    if detail:
+        detail(f"User-Agent: {USER_AGENT}")
+        detail(f"Accept-Language: {accept_language}")
+    captured_urls: list[str] = []
     if use_browser:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise RuntimeError(t("error.playwright_missing")) from exc
         log(t("log.opening_chromium"))
+        if detail:
+            detail(f"Playwright: launching headless Chromium (locale={ui_locale})")
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(user_agent=USER_AGENT, locale=ui_locale)
             page = context.new_page()
+            # Intercept image responses from common manga CDNs.
+            def handle_response(response):
+                try:
+                    u = response.url
+                    if any(cdn in u for cdn in ("mfcdn", "webtoon-phinf", "cdn.manga", "mangadex")) \
+                       and u.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                        if u not in captured_urls:
+                            captured_urls.append(u)
+                            if detail:
+                                detail(f"  [network] captured: {u}")
+                except Exception:
+                    pass
+            page.on("response", handle_response)
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                response = page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                if detail:
+                    status = response.status if response is not None else "?"
+                    detail(f"  page.goto -> HTTP {status} | final URL: {page.url}")
                 page.wait_for_timeout(1800)
                 if cancel_event.is_set():
                     raise InterruptedError(t("log.cancelled"))
                 # Trigger lazy loading without clicking controls or bypassing protections.
-                for _ in range(5):
-                    page.evaluate("window.scrollBy(0, Math.max(window.innerHeight, 700))")
-                    page.wait_for_timeout(450)
+                # Scroll until no new images are captured for several consecutive scrolls.
+                # No hard limit on total scrolls — only stop when images stop appearing.
+                scrolls_without_new = 0
+                max_scrolls_without_new = 10
+                # No max_total_scrolls: keep going until the page truly stops loading.
+                last_captured_count = len(captured_urls)
+                scroll_num = 0
+                while True:
+                    if cancel_event.is_set():
+                        raise InterruptedError(t("log.cancelled"))
+                    scroll_num += 1
+                    page.evaluate("window.scrollBy(0, Math.max(window.innerHeight, 1000))")
+                    page.wait_for_timeout(800)
+                    current_count = len(captured_urls)
+                    if current_count > last_captured_count:
+                        if detail:
+                            detail(
+                                f"  scroll {scroll_num}: +{current_count - last_captured_count} new images "
+                                f"(total {current_count})"
+                            )
+                        last_captured_count = current_count
+                        scrolls_without_new = 0
+                    else:
+                        scrolls_without_new += 1
+                        if detail:
+                            detail(
+                                f"  scroll {scroll_num}: no new images ({scrolls_without_new}/"
+                                f"{max_scrolls_without_new})"
+                            )
+                    if scrolls_without_new >= max_scrolls_without_new:
+                        if detail:
+                            detail(
+                                f"  stopping: no new images for {max_scrolls_without_new} consecutive scrolls "
+                                f"(total scrolls: {scroll_num}, total images: {current_count})"
+                            )
+                        break
+                # Final sweep to the very bottom to catch any remaining images.
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(1000)
+                # Scroll back to top so relative URLs resolve correctly if needed.
                 page.evaluate("window.scrollTo(0, 0)")
                 page.wait_for_timeout(400)
                 html = page.content()
-                for cookie in context.cookies():
+                cookies = context.cookies()
+                for cookie in cookies:
                     session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain"), path=cookie.get("path", "/"))
             finally:
                 browser.close()
-        return html, session
+        if detail:
+            detail(f"  rendered HTML: {len(html)} characters | {len(cookies)} cookies | {len(captured_urls)} network images")
+        return html, session, captured_urls
 
     log(t("log.reading_html"))
     content, content_type = request_with_retries(
@@ -405,15 +518,50 @@ def fetch_html(
         log=log,
         max_bytes=MAX_HTML_BYTES,
         timeout=(12, 35),
+        detail=detail,
     )
     if "text/html" not in content_type.lower() and "application/xhtml" not in content_type.lower():
+        if detail:
+            detail(
+                f"  unexpected Content-Type for HTML: {content_type or '(none)'}"
+            )
         log(
             t(
                 "log.content_type_warning",
                 content_type=content_type or t("log.content_type_none"),
             )
         )
-    return decode_html(content), session
+    html = decode_html(content)
+    if detail:
+        detail(f"  HTML decoded: {len(html)} characters")
+    return html, session, []
+
+    log(t("log.reading_html"))
+    content, content_type = request_with_retries(
+        session,
+        url,
+        headers={},
+        cancel_event=cancel_event,
+        log=log,
+        max_bytes=MAX_HTML_BYTES,
+        timeout=(12, 35),
+        detail=detail,
+    )
+    if "text/html" not in content_type.lower() and "application/xhtml" not in content_type.lower():
+        if detail:
+            detail(
+                f"  unexpected Content-Type for HTML: {content_type or '(none)'}"
+            )
+        log(
+            t(
+                "log.content_type_warning",
+                content_type=content_type or t("log.content_type_none"),
+            )
+        )
+    html = decode_html(content)
+    if detail:
+        detail(f"  HTML decoded: {len(html)} characters")
+    return html, session
 
 
 def default_output_dir() -> Path:
@@ -425,6 +573,100 @@ def default_output_dir() -> Path:
         if folder.is_dir():
             return folder / APP_NAME
     return home / "Downloads" / APP_NAME
+
+
+def default_log_dir() -> Path:
+    """Folder for the detailed logs.
+
+    It prefers ``logs/`` next to the application (handy when running from the
+    repository). If that place is read-only (for example an installed package),
+    it falls back to the user data folder of the current OS.
+    """
+    local = Path(__file__).resolve().parent / "logs"
+    try:
+        local.mkdir(parents=True, exist_ok=True)
+        probe = local / ".write-test"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return local
+    except OSError:
+        pass
+
+    home = Path.home()
+    system = platform.system()
+    if system == "Windows":
+        base = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+    elif system == "Darwin":
+        base = home / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+    fallback = base / "Mangaripper" / "logs"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+class DownloadLog:
+    """Highly detailed, timestamped log of a single download."""
+
+    def __init__(
+        self,
+        directory: Path,
+        label: str,
+        header: dict[str, str],
+    ) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        stem = clean_name(label, "download")[:80] or "download"
+        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        path = directory / f"{stamp}_{stem}.log"
+        counter = 1
+        while path.exists():
+            path = directory / f"{stamp}_{stem}_{counter}.log"
+            counter += 1
+        self.path = path
+        self._started = time.monotonic()
+        self._handle = path.open("w", encoding="utf-8")
+        try:
+            self._handle.write(f"{APP_NAME} {APP_VERSION} — download log\n")
+            self._handle.write("=" * 78 + "\n")
+            for key, value in header.items():
+                self._handle.write(f"{key}: {value}\n")
+            self._handle.write("=" * 78 + "\n")
+            self._handle.flush()
+        except BaseException:
+            self._handle.close()
+            raise
+
+    def detail(self, message: str) -> None:
+        """Append one timestamped line (with elapsed time) and flush it."""
+        elapsed = time.monotonic() - self._started
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        self._handle.write(f"[{stamp}] (+{elapsed:8.3f}s) {message}\n")
+        self._handle.flush()
+
+    def close(self) -> None:
+        """Write a closing line and release the file handle."""
+        try:
+            self.detail(f"Log finished (total {time.monotonic() - self._started:.3f}s).")
+        finally:
+            self._handle.close()
+
+    def __enter__(self) -> "DownloadLog":
+        return self
+
+    def __exit__(self, *_exc_info) -> None:
+        self.close()
+
+
+class NullDownloadLog:
+    """No-op log used when the detailed log file cannot be created."""
+
+    path = None
+
+    def detail(self, _message: str) -> None:
+        """Discard the line."""
+
+    def close(self) -> None:
+        """Nothing to close."""
 
 
 class MangaripperApp:
@@ -690,11 +932,63 @@ class MangaripperApp:
         use_browser: bool,
     ) -> None:
         temp_dir: Path | None = None
+        started = time.monotonic()
+        log: "DownloadLog | NullDownloadLog" = NullDownloadLog()
+        detail: LogFn = log.detail
         try:
-            html, session = fetch_html(url, use_browser, self._log, self.cancel_event)
+            try:
+                parsed = urlparse(url)
+                label = f"{parsed.netloc}_{Path(parsed.path).stem or 'chapter'}"
+                candidate = DownloadLog(
+                    default_log_dir(),
+                    label,
+                    {
+                        "Started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "App": f"{APP_NAME} {APP_VERSION}",
+                        "URL": url,
+                        "Destination folder": str(out),
+                        "ZIP name": zipname or "(automatic)",
+                        "CSS selector": selector or "(automatic)",
+                        "JavaScript rendering": "yes" if use_browser else "no",
+                        "Interface language": get_language(),
+                        "Platform": platform.platform(),
+                        "Python": sys.version.split()[0],
+                        "requests": requests.__version__,
+                        "Pillow": PILLOW_VERSION,
+                    },
+                )
+                detail = candidate.detail
+                log = candidate
+                self._log(t("log.detail_file", path=candidate.path))
+            except OSError as exc:
+                self._log(t("log.detail_file_error", error=exc))
+
+            html, session, captured_urls = fetch_html(
+                url,
+                use_browser,
+                self._log,
+                self.cancel_event,
+                detail=detail,
+            )
             if self.cancel_event.is_set():
                 raise InterruptedError(t("log.cancelled"))
             image_urls, title, used_selector = extract_image_urls(html, url, selector)
+            # If Playwright captured image URLs from network (e.g. MangaFire virtualized DOM),
+            # merge them: use DOM order for images present in both, then append network-only ones.
+            if captured_urls:
+                detail(
+                    f"Merging {len(image_urls)} DOM URLs with "
+                    f"{len(captured_urls)} network-captured URLs"
+                )
+                dom_set = set(image_urls)
+                # Keep DOM order for URLs that exist in both
+                merged = list(image_urls)
+                # Append captured URLs not already in DOM, preserving capture order
+                for u in captured_urls:
+                    if u not in dom_set:
+                        merged.append(u)
+                image_urls = merged
+                used_selector = used_selector or "dom+network-capture"
             self._log(t("log.title", title=title))
             self._log(
                 t(
@@ -702,6 +996,8 @@ class MangaripperApp:
                     selector=used_selector or t("selector.auto"),
                 )
             )
+            detail(f"Chapter title: {title}")
+            detail(f"Selector used: {used_selector or '(automatic)'}")
             if not image_urls:
                 raise RuntimeError(t("error.no_images"))
             if len(image_urls) > MAX_IMAGES:
@@ -712,10 +1008,19 @@ class MangaripperApp:
                         limit=MAX_IMAGES,
                     )
                 )
+                detail(
+                    "Image limit reached: "
+                    f"{len(image_urls)} detected, only the first {MAX_IMAGES} "
+                    "will be downloaded"
+                )
                 image_urls = image_urls[:MAX_IMAGES]
             self._log(t("log.found_pages", count=len(image_urls)))
+            detail(f"Image URLs found: {len(image_urls)}")
+            for position, candidate in enumerate(image_urls, start=1):
+                detail(f"  [{position:03d}] {candidate}")
             temp_dir = Path(tempfile.mkdtemp(prefix="mangaripper_", dir=str(out)))
             self.current_temp_dir = temp_dir
+            detail(f"Temporary folder: {temp_dir}")
             downloaded: list[Path] = []
             failed_count = 0
             for index, image_url in enumerate(image_urls, start=1):
@@ -725,6 +1030,11 @@ class MangaripperApp:
                     t("status.downloading", current=index, total=len(image_urls))
                 )
                 self._progress(index - 1, len(image_urls))
+                detail(
+                    f"Page {index}/{len(image_urls)}: downloading "
+                    f"{image_url} (Referer: {url})"
+                )
+                page_started = time.monotonic()
                 try:
                     content, content_type = request_with_retries(
                         session,
@@ -736,10 +1046,15 @@ class MangaripperApp:
                         cancel_event=self.cancel_event,
                         log=self._log,
                         max_bytes=MAX_IMAGE_BYTES,
+                        detail=detail,
                     )
                     content_type = content_type.lower()
                     is_image_magic = content.startswith(
                         (b"\xff\xd8\xff", b"\x89PNG", b"GIF8", b"RIFF")
+                    )
+                    detail(
+                        f"  Content-Type: {content_type or '(none)'} | "
+                        f"image signature: {'yes' if is_image_magic else 'no'}"
                     )
                     if "text/html" in content_type and not is_image_magic:
                         raise ValueError(t("error.html_instead_of_image"))
@@ -763,6 +1078,11 @@ class MangaripperApp:
                             height=height,
                         )
                     )
+                    detail(
+                        f"  saved {filepath} | {width}x{height} px | "
+                        f"{filepath.stat().st_size} bytes on disk | "
+                        f"{time.monotonic() - page_started:.3f}s"
+                    )
                 except InterruptedError:
                     raise
                 except (
@@ -774,6 +1094,10 @@ class MangaripperApp:
                     failed_count += 1
                     self._log(
                         t("log.page_error", index=index, total=len(image_urls), error=exc)
+                    )
+                    detail(
+                        f"  page failed after "
+                        f"{time.monotonic() - page_started:.3f}s: {exc!r}"
                     )
                 self._progress(index, len(image_urls))
                 if self.cancel_event.wait(DOWNLOAD_DELAY):
@@ -800,6 +1124,15 @@ class MangaripperApp:
             )
             if failed_count:
                 self._log(t("log.failed_warning", count=failed_count))
+            detail(
+                f"ZIP created: {zip_path} | {zip_path.stat().st_size} bytes | "
+                f"{len(downloaded)} entries | ZIP_STORED"
+            )
+            detail(
+                f"Finished OK: {len(downloaded)} pages saved, "
+                f"{failed_count} failed, total "
+                f"{time.monotonic() - started:.3f}s"
+            )
             summary = t(
                 "summary.done",
                 saved=len(downloaded),
@@ -810,15 +1143,19 @@ class MangaripperApp:
             self.events.put(("done", True, summary, False))
         except InterruptedError as exc:
             self._log(str(exc))
+            detail(f"Cancelled by the user: {exc}")
             self.events.put(("done", False, str(exc), True))
         except Exception as exc:  # pylint: disable=broad-except
             # Thread boundary: any unexpected failure must reach the UI.
             self._log(t("log.error", error=exc))
+            detail(f"ERROR: {exc!r}")
+            detail(traceback.format_exc())
             self.events.put(("done", False, str(exc), False))
         finally:
             if temp_dir and temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
             self.current_temp_dir = None
+            log.close()
 
     def _on_close(self) -> None:
         if self.worker and self.worker.is_alive():
