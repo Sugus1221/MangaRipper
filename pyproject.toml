@@ -8,6 +8,16 @@ version = "0.1.0"
 description = "Mangaripper: download public chapters and pack them into a PNG ZIP"
 readme = "README.md"
 requires-python = ">=3.10"
+license = {text = "Unlicense"}
+authors = [{name = "Mangaripper contributors"}]
+keywords = ["manga", "comic", "downloader", "tkinter", "png", "zip", "public-domain"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: Public Domain",
+    "Operating System :: OS Independent",
+    "Environment :: X11 Applications :: Tk",
+    "Topic :: Multimedia :: Graphics",
+]
 dependencies = [
     "requests>=2.31.0",
     "beautifulsoup4>=4.12.0",
@@ -21,6 +31,10 @@ dev = ["pytest>=8.0", "pylint>=3.0"]
 
 [project.scripts]
 mangaripper = "mangaripper:main"
+
+[project.urls]
+Homepage = "https://github.com/Sugus1221/MangaRipper"
+Releases = "https://github.com/Sugus1221/MangaRipper/releases"
 
 [tool.setuptools]
 py-modules = ["mangaripper", "languages"]

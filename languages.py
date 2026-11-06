@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Unlicense
 """Translation layer for Mangaripper.
 
 Adding a language means adding one entry to ``LANGUAGES`` and one dictionary

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Unlicense
 """Mangaripper: a small GUI to save the images of an accessible chapter into a ZIP.
 
 Responsible use: download only images the page serves normally.
