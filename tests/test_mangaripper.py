@@ -4,9 +4,9 @@ import threading
 import unittest
 import unittest.mock
 from io import BytesIO
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
@@ -447,6 +447,52 @@ class I18nTests(unittest.TestCase):
         with self.assertRaises(ValueError) as context:
             mangaripper.extract_image_urls("<img>", "https://a.example/", "[")
         self.assertIn("Selector CSS no válido", str(context.exception))
+
+
+class ConfigDirTests(unittest.TestCase):
+    """default_config_dir() follows the conventions of the running OS."""
+
+    def test_linux_respects_xdg_config_home(self):
+        with unittest.mock.patch.object(i18n.platform, "system", return_value="Linux"), \
+             unittest.mock.patch.dict(
+                 os.environ, {"XDG_CONFIG_HOME": "/tmp/opencode/xdg"}
+             ):
+            self.assertEqual(
+                i18n.default_config_dir(), Path("/tmp/opencode/xdg/mangaripper")
+            )
+
+    def test_linux_defaults_to_home_config(self):
+        with unittest.mock.patch.object(i18n.platform, "system", return_value="Linux"), \
+             unittest.mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("XDG_CONFIG_HOME", None)
+            self.assertEqual(
+                i18n.default_config_dir(),
+                Path.home() / ".config" / "mangaripper",
+            )
+
+    def test_windows_uses_localappdata(self):
+        with unittest.mock.patch.object(i18n.platform, "system", return_value="Windows"), \
+             unittest.mock.patch.dict(
+                 os.environ, {"LOCALAPPDATA": r"C:\Users\test\AppData\Local"}
+             ):
+            directory = i18n.default_config_dir()
+            self.assertEqual(directory.parent, Path(r"C:\Users\test\AppData\Local"))
+            self.assertEqual(directory.name, "Mangaripper")
+
+    def test_windows_falls_back_to_appdata_path(self):
+        with unittest.mock.patch.object(i18n.platform, "system", return_value="Windows"), \
+             unittest.mock.patch.dict(os.environ, {"LOCALAPPDATA": ""}):
+            self.assertEqual(
+                i18n.default_config_dir(),
+                Path.home() / "AppData" / "Local" / "Mangaripper",
+            )
+
+    def test_macos_uses_application_support(self):
+        with unittest.mock.patch.object(i18n.platform, "system", return_value="Darwin"):
+            self.assertEqual(
+                i18n.default_config_dir(),
+                Path.home() / "Library" / "Application Support" / "Mangaripper",
+            )
 
 
 if __name__ == "__main__":

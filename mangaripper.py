@@ -416,7 +416,8 @@ def fetch_html(
 
 
 def default_output_dir() -> Path:
-    """Prefer the user's real download folder, whatever its language."""
+    """Fallback suggestion (the user's real download folder) when the
+    destination field is empty."""
     home = Path.home()
     for name in ("Downloads", "Descargas"):
         folder = home / name
@@ -439,7 +440,7 @@ class MangaripperApp:
         self.worker: threading.Thread | None = None
         self.current_temp_dir: Path | None = None
         self._closing = False
-        self.output_dir = tk.StringVar(value=str(default_output_dir()))
+        self.output_dir = tk.StringVar(value="")
         self.url_var = tk.StringVar()
         self.selector_var = tk.StringVar()
         self.zipname_var = tk.StringVar()
@@ -495,6 +496,12 @@ class MangaripperApp:
             folder_row, text=t("ui.choose"), command=self._choose_folder
         )
         self.choose_button.pack(side="left", padx=(8, 0))
+        self.folder_hint = ttk.Label(
+            content,
+            text=t("ui.folder_hint"),
+            foreground="#666666",
+        )
+        self.folder_hint.pack(anchor="w")
 
         self.zipname_label = ttk.Label(content, text=t("ui.zipname"))
         self.zipname_label.pack(anchor="w")
@@ -561,6 +568,7 @@ class MangaripperApp:
         self.subtitle_label.configure(text=t("app.subtitle"))
         self.url_label.configure(text=t("ui.url"))
         self.folder_label.configure(text=t("ui.folder"))
+        self.folder_hint.configure(text=t("ui.folder_hint"))
         self.choose_button.configure(text=t("ui.choose"))
         self.zipname_label.configure(text=t("ui.zipname"))
         self.selector_label.configure(text=t("ui.selector"))
@@ -600,7 +608,8 @@ class MangaripperApp:
             self.output_dir.set(chosen)
 
     def _open_folder(self) -> None:
-        folder = Path(self.output_dir.get()).expanduser()
+        destination = self.output_dir.get().strip() or str(default_output_dir())
+        folder = Path(destination).expanduser()
         try:
             folder.mkdir(parents=True, exist_ok=True)
             system = platform.system()
@@ -625,7 +634,18 @@ class MangaripperApp:
                 t("dialog.invalid_url"),
             )
             return
-        out = Path(self.output_dir.get()).expanduser()
+        destination = self.output_dir.get().strip()
+        if not destination:
+            chosen = filedialog.askdirectory(
+                title=t("dialog.choose_folder"),
+                initialdir=str(default_output_dir()),
+            )
+            if not chosen:
+                self.status_var.set(t("status.no_folder"))
+                return
+            self.output_dir.set(chosen)
+            destination = chosen
+        out = Path(destination).expanduser()
         try:
             out.mkdir(parents=True, exist_ok=True)
         except OSError as exc:

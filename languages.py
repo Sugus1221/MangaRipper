@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 from pathlib import Path
 
 DEFAULT_LANGUAGE = "en"
@@ -27,6 +28,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ui.language": "Language",
         "ui.url": "Chapter URL",
         "ui.folder": "Destination folder",
+        "ui.folder_hint": "Empty: you are asked where to save before each download.",
         "ui.choose": "Choose…",
         "ui.zipname": "ZIP name (optional; without .zip)",
         "ui.selector": "Optional CSS selector (for a specific site)",
@@ -38,6 +40,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ui.log": "Log",
         # Status line
         "status.ready": "Ready to download a chapter.",
+        "status.no_folder": "No destination folder was selected.",
         "status.starting": "Starting…",
         "status.downloading": "Downloading page {current} of {total}…",
         "status.cancelling": "Cancelling… (it will stop as soon as possible)",
@@ -122,6 +125,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ui.language": "Idioma",
         "ui.url": "URL del capítulo",
         "ui.folder": "Carpeta de destino",
+        "ui.folder_hint": "Vacío: se pregunta dónde guardar antes de cada descarga.",
         "ui.choose": "Elegir…",
         "ui.zipname": "Nombre del ZIP (opcional; sin .zip)",
         "ui.selector": "Selector CSS opcional (para una web concreta)",
@@ -133,6 +137,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "ui.log": "Registro",
         # Estado
         "status.ready": "Listo para descargar un capítulo.",
+        "status.no_folder": "No se ha elegido carpeta de destino.",
         "status.starting": "Iniciando…",
         "status.downloading": "Descargando página {current} de {total}…",
         "status.cancelling": "Cancelando… (se detendrá lo antes posible)",
@@ -220,9 +225,23 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
 _state = {"code": DEFAULT_LANGUAGE}
 
-CONFIG_DIR = (
-    Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mangaripper"
-)
+def default_config_dir() -> Path:
+    """Configuration folder following the conventions of each OS."""
+    home = Path.home()
+    system = platform.system()
+    if system == "Windows":
+        # %LOCALAPPDATA% (usually C:\Users\<user>\AppData\Local\Mangaripper).
+        base = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+        return base / "Mangaripper"
+    if system == "Darwin":
+        # macOS: ~/Library/Application Support/Mangaripper.
+        return home / "Library" / "Application Support" / "Mangaripper"
+    # Linux and the rest: respect XDG_CONFIG_HOME when defined.
+    base = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    return base / "mangaripper"
+
+
+CONFIG_DIR = default_config_dir()
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 

@@ -4,7 +4,13 @@ A Python/Tkinter desktop app that saves the visible pages of a public chapter an
 
 ## Languages
 
-The interface ships in English and Spanish, and you can switch language inside the app with the **Language** dropdown at the top right. The choice is remembered between runs (stored in `~/.config/mangaripper/settings.json`).
+The interface ships in English and Spanish, and you can switch language inside the app with the **Language** dropdown at the top right. The choice is remembered between runs, stored in the user configuration folder for each OS:
+
+| OS | Location |
+|---|---|
+| Windows | `%LOCALAPPDATA%\Mangaripper\settings.json` |
+| macOS | `~/Library/Application Support/Mangaripper/settings.json` |
+| Linux / BSD | `$XDG_CONFIG_HOME/mangaripper/settings.json` (or `~/.config/mangaripper/`) |
 
 **Adding a language** is a matter of editing `languages.py`:
 
@@ -36,7 +42,7 @@ python mangaripper.py # or simply: mangaripper
 ## Usage
 
 1. Paste the direct chapter URL.
-2. Choose the destination folder.
+2. Leave the destination folder empty (you will be asked where to save before each download) or pick a folder with **Choose…**.
 3. Press **Download and create ZIP**.
 4. Pages are automatically converted to PNG and stored in numeric order inside the ZIP.
 
